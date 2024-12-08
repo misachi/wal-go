@@ -11,4 +11,6 @@ wal.Register(entry.Id)
 wal.Insert(entry)
 wal.Commit(entry.Id)
 
+DumpWal(wal.segment.file.Name()) // List all WAL records
+
 ```
