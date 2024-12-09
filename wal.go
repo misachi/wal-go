@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"log/slog"
@@ -66,7 +68,7 @@ func (e *WALEntry) toBytes() []byte {
 	bufStart := size - len(e.Data)
 	buf := make([]byte, size)
 	copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(e)), size))
-	buf2 := buf[bufStart : bufStart+len(e.Data)]  // Data area slice
+	buf2 := buf[bufStart : bufStart+len(e.Data)] // Data area slice
 	copy(buf2, e.Data)
 	return buf
 }
@@ -87,16 +89,18 @@ type WALHdr struct {
 }
 
 func (hdr *WALHdr) writeHdr() error {
-	newHdr := struct {
-		size       uint64
-		segno      uint32
-		nextSegNo  uint32
-		lastSyncAt string
-	}{
-		size:       hdr.size,
-		segno:      hdr.segNo.Load(),
-		nextSegNo:  hdr.nextSegNo.Load(),
-		lastSyncAt: time.Now().Format(time.RFC3339),
+	type newHdr struct {
+		Size       uint64
+		Segno      uint32
+		NextSegNo  uint32
+		LastSyncAt string
+	}
+
+	nHdr := newHdr{
+		Size:       hdr.size,
+		Segno:      hdr.segNo.Load(),
+		NextSegNo:  hdr.nextSegNo.Load(),
+		LastSyncAt: hdr.lastSyncAt.Format(time.RFC3339),
 	}
 
 	metaFile, err := os.OpenFile(path.Join(WALDir, "meta"), os.O_WRONLY, WAL_FILE_MODE)
@@ -105,23 +109,34 @@ func (hdr *WALHdr) writeHdr() error {
 	}
 	defer metaFile.Close()
 
-	size := (unsafe.Sizeof(uint32(1)) * 2) + unsafe.Sizeof(uint64(1)) + uintptr(len(newHdr.lastSyncAt))
-	ptr := unsafe.Pointer(&newHdr)
-	buf := unsafe.Slice((*byte)(ptr), size)
-	metaFile.Write(buf)
-	metaFile.Sync()
+	var buf bytes.Buffer
+
+	enc := gob.NewEncoder(&buf)
+
+	err = enc.Encode(nHdr)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		return fmt.Errorf("writeHdr encoding error: %v", err)
+	}
+
+	nr, err := metaFile.Write(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("writeHdr write error: %s", err)
+	}
+
+	if buf.Len() != nr {
+		Logger.Warn("writeHdr data mismatch", "written", nr, "wanted", buf.Len())
+	}
 	return nil
 }
 
 func (hdr *WALHdr) readHdr() error {
 	type newHdr struct {
-		size       uint64
-		segno      uint32
-		nextSegNo  uint32
-		lastSyncAt string
+		Size       uint64
+		Segno      uint32
+		NextSegNo  uint32
+		LastSyncAt string
 	}
-
-	size := (unsafe.Sizeof(uint32(1)) * 2) + unsafe.Sizeof(uint64(1)) + uintptr(len(time.Now().Format(time.RFC3339)))
 
 	metaFile, err := os.OpenFile(path.Join(WALDir, "meta"), os.O_RDONLY, WAL_FILE_MODE)
 	if err != nil {
@@ -133,23 +148,32 @@ func (hdr *WALHdr) readHdr() error {
 	if err != nil {
 		return fmt.Errorf("readHdr stat error: %v", err)
 	}
+	fileSize := stat.Size()
 
-	if stat.Size() > 0 {
-		buf := make([]byte, size)
-		_, err := metaFile.Read(buf)
+	if fileSize > 0 {
+		buf1 := make([]byte, fileSize)
+		_, err := metaFile.Read(buf1)
 		if err != nil {
 			return fmt.Errorf("readHdr meta file read error: %v", err)
 		}
-		hdr2 := (*newHdr)(unsafe.Pointer(&buf[0]))
-		if len(hdr2.lastSyncAt) > 0 {
-			hdr.lastSyncAt, err = time.Parse(time.RFC3339, hdr2.lastSyncAt)
-			if err != nil {
-				return fmt.Errorf("readHdr date parsing error: %v", err)
-			}
+
+		buf := bytes.NewBuffer(buf1)
+		dec := gob.NewDecoder(buf)
+		var nHdr newHdr
+
+		err = dec.Decode(&nHdr)
+		if err != nil {
+			return fmt.Errorf("readHdr decoding error: %v", err)
 		}
-		hdr.segNo.Store(hdr2.segno)
-		hdr.nextSegNo.Store(hdr2.nextSegNo)
-		hdr.size = hdr2.size
+
+		hdr.lastSyncAt, err = time.Parse(time.RFC3339, nHdr.LastSyncAt)
+		if err != nil {
+			return fmt.Errorf("time parsing error")
+		}
+
+		hdr.segNo.Store(nHdr.Segno)
+		hdr.nextSegNo.Store(nHdr.NextSegNo)
+		hdr.size = nHdr.Size
 		return nil
 	}
 	return fmt.Errorf("readHdr meta file empty")
@@ -157,12 +181,11 @@ func (hdr *WALHdr) readHdr() error {
 
 type WAL struct {
 	hdr      *WALHdr
-	offset   atomic.Uint64
-	pinCount atomic.Uint32
 	segment  *WALSegment
 	mtx      *sync.Mutex
-	data     []byte
 	metaFile *os.File
+	offset   atomic.Uint64
+	data     []byte
 }
 
 func newWALSegment(size uint64, dir string) (*WALSegment, error) {
@@ -252,16 +275,20 @@ retry:
 			return nil, fmt.Errorf("NewWAL new directory: %v", err)
 		}
 
-		metaFile, err := os.OpenFile(path.Join(WALDir, "meta"), os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
+		metaPath := path.Join(WALDir, "meta")
+
+		metaFile, err := os.OpenFile(metaPath, os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
 		if err != nil {
-			return nil, fmt.Errorf("NewWAL failed to create meta file: %v", err)
+			return nil, fmt.Errorf("NewWAL failed to open meta file: %v", err)
 		}
 
 		err = hdr.readHdr()
 		if err != nil {
 			if hdr.segNo.Load() < 1 {
+				hdr.lastSyncAt = time.Now()
 				hdr.size = WAL_MAX_SHM
 				hdr.segNo.Store(1)
+				hdr.nextSegNo.Store(1)
 				hdr.writeHdr()
 			} else {
 				return nil, fmt.Errorf("NewWAL: %v", err)
@@ -303,11 +330,11 @@ func (wal *WAL) Register(Id uint64) error {
 
 	entry := WALEntry{state: WAL_START, Id: Id}
 	entry.size = uint32(entry.esize())
-	ret := wal.insert(&entry)
-	if ret < 0 {
-		wal.Unpin()
-		return fmt.Errorf("Register: %v", ret)
+	err := wal.insert(&entry)
+	if err != nil {
+		return fmt.Errorf("Register: %v", err)
 	}
+
 	return nil
 }
 
@@ -319,18 +346,6 @@ func (wal *WAL) sync(syncData bool) error {
 	wal.resetOffset()
 	wal.hdr.lastSyncAt = time.Now()
 	return nil
-}
-
-func (wal *WAL) Pin() {
-	cnt := wal.pinCount.Load()
-	cnt += 1
-	wal.pinCount.Store(cnt)
-}
-
-func (wal *WAL) Unpin() {
-	cnt := wal.pinCount.Load()
-	cnt -= 1
-	wal.pinCount.Store(cnt)
 }
 
 func (wal *WAL) setOffset(size uint64) uint64 {
@@ -352,21 +367,19 @@ func (wal *WAL) resetOffset() {
 	}
 }
 
-func (wal *WAL) insert(entry *WALEntry) int32 {
+func (wal *WAL) insert(entry *WALEntry) error {
 	MapLock.RLock()
 	_, ok := RegisterMap[entry.Id]
 	MapLock.RUnlock()
 
 	if !ok {
-		Logger.Error("Insert: Data has not been registered")
-		return -1
+		return fmt.Errorf("Insert: Data has not been registered")
 	}
 
 	size := entry.esize()
 	fileSize := wal.fileSize()
 	if fileSize == -1 {
-		Logger.Error("Insert: stat error")
-		return -1
+		return fmt.Errorf("Insert: stat error")
 	}
 
 	// Not enough space. We need to empty buffer
@@ -379,7 +392,7 @@ func (wal *WAL) insert(entry *WALEntry) int32 {
 		wal.extendWAL()
 	}
 
-	if (uint64(fileSize)+uint64(size)) >= wal.segment.size {
+	if (uint64(fileSize) + uint64(size)) >= wal.segment.size {
 		wal.switchWAL()
 	}
 
@@ -387,17 +400,12 @@ func (wal *WAL) insert(entry *WALEntry) int32 {
 	offset := wal.setOffset(uint64(size))
 
 	wal.data = append(wal.data[:offset], entry.toBytes()...)
-	return 0
+	return nil
 }
 
 func (wal *WAL) Insert(entry *WALEntry) error {
 	entry.state = WAL_INSERT
-	ret := wal.insert(entry)
-	if ret < 0 {
-		wal.Unpin()
-		return fmt.Errorf("Insert: %v", ret)
-	}
-	return nil
+	return wal.insert(entry)
 }
 
 func (wal *WAL) writeWAL() error {
@@ -425,15 +433,11 @@ func (wal *WAL) writeWAL() error {
 }
 
 func (wal *WAL) Commit(Id uint64) error {
-	wal.Pin()
-	defer wal.Unpin()
-
 	entry := WALEntry{state: WAL_COMMITTED, Id: Id}
 	entry.size = uint32(entry.esize())
-	ret := wal.insert(&entry)
-	if ret < 0 {
-		wal.Unpin()
-		return fmt.Errorf("Commit: %v", ret)
+	err := wal.insert(&entry)
+	if err != nil {
+		return fmt.Errorf("Commit: %v", err)
 	}
 
 	wal.writeWAL()
@@ -442,14 +446,11 @@ func (wal *WAL) Commit(Id uint64) error {
 }
 
 func (wal *WAL) Abort(Id uint64) error {
-	wal.Pin()
-	defer wal.Unpin()
 	entry := WALEntry{state: WAL_ABORTED, Id: Id}
 	entry.size = uint32(entry.esize())
-	ret := wal.insert(&entry)
-	if ret < 0 {
-		wal.Unpin()
-		return fmt.Errorf("Abort: %v", ret)
+	err := wal.insert(&entry)
+	if err != nil {
+		return fmt.Errorf("Abort: %v", err)
 	}
 	wal.writeWAL()
 	wal.sync(false)
@@ -471,7 +472,7 @@ func (wal *WAL) extendWAL() {
 
 	nextSegNo := wal.hdr.nextSegNo.Load()
 	if nextSegNo > wal.hdr.segNo.Load() {
-		Logger.Info("ExtendWAL: Next WAL segmnent file already created")
+		Logger.Info("Next WAL segment file already created")
 		return
 	}
 	newNextSegNo := nextSegNo + 1
@@ -485,18 +486,17 @@ func (wal *WAL) extendWAL() {
 	}
 }
 
-func (wal *WAL) switchWAL() int {
+func (wal *WAL) switchWAL() {
 	wal.mtx.Lock()
 	defer wal.mtx.Unlock()
 
 	nextSegNo := wal.hdr.nextSegNo.Load()
-
-	if wal.pinCount.Load() > 1 {
-		Logger.Warn("SwitchWAL: Too many pins")
-		return -1
+	if nextSegNo == wal.hdr.segNo.Load() {
+		Logger.Info("Already switched log files")
+		return
 	}
 
-	wal.segment.file.Close()
+	wal.segment.file.Close() // Closing old segment file
 	fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", nextSegNo))
 	dataFile, err := os.OpenFile(fileN, os.O_WRONLY, WAL_FILE_MODE)
 	if err == nil {
@@ -505,7 +505,6 @@ func (wal *WAL) switchWAL() int {
 		wal.hdr.segNo.Store(nextSegNo)
 		wal.hdr.writeHdr()
 	}
-	return 0
 }
 
 func (w *WAL) Close() {
