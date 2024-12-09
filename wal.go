@@ -10,6 +10,7 @@ import (
 	"path"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 )
@@ -53,6 +54,13 @@ type WALEntry struct {
 	state WALSTATE_t
 	Id    uint64
 	Data  []byte
+}
+
+func fallocate(fd int, offset int64, size int64) {
+	err := syscall.Fallocate(fd, 0, 0, size)
+	if err != nil {
+		Logger.Warn("File allocation failed", "error_msg", err)
+	}
 }
 
 func (e *WALEntry) fixedSize() int {
@@ -480,11 +488,12 @@ func (wal *WAL) extendWAL() {
 		newNextSegNo := nextSegNo + 1
 
 		fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", newNextSegNo))
-		file, err := os.OpenFile(fileN, os.O_CREATE, WAL_FILE_MODE)
+		file, err := os.OpenFile(fileN, os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
 		if err == nil {
 			defer file.Close()
 			wal.hdr.nextSegNo.CompareAndSwap(nextSegNo, newNextSegNo)
 			wal.hdr.writeHdr()
+			fallocate(int(file.Fd()), 0, int64(wal.segment.size))
 			file.Sync()
 		}
 	}()
