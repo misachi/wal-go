@@ -268,10 +268,6 @@ retry:
 			}
 		}
 
-		hdr.size = WAL_MAX_SHM
-		hdr.segNo.Store(1)
-		hdr.writeHdr()
-
 		segment, err := newWALSegment(WAL_MAX_FILESIZE, WALDir)
 		if err != nil {
 			return nil, fmt.Errorf("NewWAL unable to create wal segment: %v", err)
@@ -280,7 +276,7 @@ retry:
 		CurrentWAL = &WAL{
 			segment:  segment,
 			mtx:      &sync.Mutex{},
-			data:     make([]byte, WAL_MAX_SHM), // NewList(),
+			data:     make([]byte, WAL_MAX_SHM),
 			metaFile: metaFile,
 			hdr:      hdr,
 		}
@@ -431,11 +427,6 @@ func (wal *WAL) writeWAL() error {
 func (wal *WAL) Commit(Id uint64) error {
 	wal.Pin()
 	defer wal.Unpin()
-
-	// cnt := wal.pinCount.Load()
-	// if cnt <= 0 {
-	// 	return fmt.Errorf("Commit: Pin must be obtained first")
-	// }
 
 	entry := WALEntry{state: WAL_COMMITTED, Id: Id}
 	entry.size = uint32(entry.esize())
