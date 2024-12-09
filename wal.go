@@ -475,15 +475,19 @@ func (wal *WAL) extendWAL() {
 		Logger.Info("Next WAL segment file already created")
 		return
 	}
-	newNextSegNo := nextSegNo + 1
 
-	fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", newNextSegNo))
-	file, err := os.OpenFile(fileN, os.O_CREATE, WAL_FILE_MODE)
-	if err == nil {
-		defer file.Close()
-		wal.hdr.nextSegNo.CompareAndSwap(nextSegNo, newNextSegNo)
-		wal.hdr.writeHdr()
-	}
+	go func() {
+		newNextSegNo := nextSegNo + 1
+
+		fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", newNextSegNo))
+		file, err := os.OpenFile(fileN, os.O_CREATE, WAL_FILE_MODE)
+		if err == nil {
+			defer file.Close()
+			wal.hdr.nextSegNo.CompareAndSwap(nextSegNo, newNextSegNo)
+			wal.hdr.writeHdr()
+			file.Sync()
+		}
+	}()
 }
 
 func (wal *WAL) switchWAL() {
