@@ -483,14 +483,14 @@ func (wal *WAL) extendWAL() {
 		return
 	}
 
-	go func() {
-		newNextSegNo := nextSegNo + 1
+	newNextSegNo := nextSegNo + 1
+	wal.hdr.nextSegNo.CompareAndSwap(nextSegNo, newNextSegNo)
 
+	go func() {
 		fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", newNextSegNo))
 		file, err := os.OpenFile(fileN, os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
 		if err == nil {
 			defer file.Close()
-			wal.hdr.nextSegNo.CompareAndSwap(nextSegNo, newNextSegNo)
 			wal.hdr.writeHdr()
 			fallocate(int(file.Fd()), 0, int64(wal.segment.size))
 			file.Sync()
