@@ -552,15 +552,15 @@ func DumpWal(fileName string) {
 			if (off + int(sz)) > chunk {
 				break
 			}
-			buf2 := make([]byte, sz)
-			copy(buf2, buf[off:off+int(sz)])
-			entry := (*WALEntry)(unsafe.Pointer(&buf2[0]))
 
-			arr := buf2[entry.fixedSize():]
+			entry := WALEntry{}
+			arr := buf[off+entry.fixedSize():off+int(sz)]
 			id := *(*byte)(unsafe.Pointer(
-				uintptr(unsafe.Pointer(&buf2[0])) + unsafe.Offsetof(entry.id)))
+				uintptr(unsafe.Pointer(&buf[off])) + unsafe.Offsetof(entry.id)))
+			eState := *(*WALSTATE_t)(unsafe.Pointer(
+				uintptr(unsafe.Pointer(&buf[off])) + unsafe.Offsetof(entry.state)))
 
-			switch entry.state {
+			switch eState {
 			case WAL_START:
 				state = "START"
 			case WAL_INSERT:
@@ -572,7 +572,7 @@ func DumpWal(fileName string) {
 			default:
 				Logger.Warn("Unknown state")
 			}
-			fmt.Printf("id=%d, size=%d, state=%s, data=%s\n", id, entry.size, state, arr)
+			fmt.Printf("id=%d, size=%d, state=%s, data=%s\n", id, sz, state, arr)
 			off += int(sz)
 		}
 	}
