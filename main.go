@@ -15,38 +15,38 @@ func main() {
 	}
 	defer wal.Close()
 
-	entry := NewWALEntry(uint64(id), []byte("Hello World"))
+	entry := NewWALEntry(id, []byte("Hello World"))
 
-	err = wal.Register(uint64(id))
+	err = wal.Register(id)
 	if err != nil {
 		fmt.Printf("Register: %v\n", err)
 		os.Exit(1)
 	}
 
 	wal.Insert(entry)
-	err = wal.Commit(uint64(id))
+	err = wal.Commit(id)
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
 
 	id = 20
-	entry = NewWALEntry(uint64(id), []byte("Welcome to the New World"))
+	entry = NewWALEntry(id, []byte{87, 101,108, 99, 111, 109, 101, 32, 116, 111, 32, 116, 104, 101, 32, 78, 101, 119, 32, 87, 111, 114, 108, 100}) // bytes: Welcome to the New World
 
-	wal.Register(uint64(id))
+	wal.Register(id)
 	wal.Insert(entry)
-	err = wal.Commit(uint64(id))
+	err = wal.Commit(id)
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
 
 	id = 21
-	entry = NewWALEntry(uint64(id), []byte("Make yourself at home"))
+	entry = NewWALEntry(id, []byte("Make yourself at home"))
 
-	wal.Register(uint64(id))
+	wal.Register(id)
 	wal.Insert(entry)
-	err = wal.Commit(uint64(id))
+	err = wal.Commit(id)
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
