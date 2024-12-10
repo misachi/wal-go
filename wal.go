@@ -94,9 +94,13 @@ type WALHdr struct {
 	nextSegNo  atomic.Uint32
 	size       uint64
 	lastSyncAt time.Time
+	mtx        *sync.RWMutex
 }
 
 func (hdr *WALHdr) writeHdr() error {
+	hdr.mtx.Lock()
+	defer hdr.mtx.Unlock()
+
 	type newHdr struct {
 		Size       uint64
 		Segno      uint32
@@ -139,6 +143,9 @@ func (hdr *WALHdr) writeHdr() error {
 }
 
 func (hdr *WALHdr) readHdr() error {
+	hdr.mtx.RLock()
+	defer hdr.mtx.RUnlock()
+
 	type newHdr struct {
 		Size       uint64
 		Segno      uint32
@@ -198,11 +205,13 @@ type WAL struct {
 
 func newWALSegment(size uint64, dir string) (*WALSegment, error) {
 	var segment *WALSegment
-	var hdr WALHdr
+	var hdr *WALHdr
 	var segno uint32
 
 	Logger.Info("New log segment file")
 	segment = new(WALSegment)
+
+	hdr = CurrentWAL.hdr
 	err := hdr.readHdr()
 	if err != nil {
 		return nil, fmt.Errorf("newWALSegment WAL header error: %v", err)
@@ -289,6 +298,8 @@ retry:
 			return nil, fmt.Errorf("NewWAL failed to open meta file: %v", err)
 		}
 
+		hdr.mtx = &sync.RWMutex{}
+
 		err = hdr.readHdr()
 		if err != nil {
 			if hdr.segNo.Load() < 1 {
@@ -302,18 +313,20 @@ retry:
 			}
 		}
 
-		segment, err := newWALSegment(WAL_MAX_FILESIZE, WALDir)
-		if err != nil {
-			return nil, fmt.Errorf("NewWAL unable to create wal segment: %v", err)
-		}
-
 		CurrentWAL = &WAL{
-			segment:  segment,
 			mtx:      &sync.Mutex{},
 			data:     make([]byte, WAL_MAX_SHM),
 			metaFile: metaFile,
 			hdr:      hdr,
 		}
+
+		segment, err := newWALSegment(WAL_MAX_FILESIZE, WALDir)
+		if err != nil {
+			return nil, fmt.Errorf("NewWAL unable to create wal segment: %v", err)
+		}
+
+		CurrentWAL.segment = segment
+
 	}
 
 	if CurrentWAL == nil {
@@ -351,7 +364,10 @@ func (wal *WAL) sync(syncData bool) error {
 		return err
 	}
 	wal.resetOffset()
+
+	wal.hdr.mtx.Lock()
 	wal.hdr.lastSyncAt = time.Now()
+	wal.hdr.mtx.Unlock()
 	return nil
 }
 
@@ -554,7 +570,7 @@ func DumpWal(fileName string) {
 			}
 
 			entry := WALEntry{}
-			arr := buf[off+entry.fixedSize():off+int(sz)]
+			arr := buf[off+entry.fixedSize() : off+int(sz)]
 			id := *(*byte)(unsafe.Pointer(
 				uintptr(unsafe.Pointer(&buf[off])) + unsafe.Offsetof(entry.id)))
 			eState := *(*WALSTATE_t)(unsafe.Pointer(
