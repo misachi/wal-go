@@ -52,8 +52,8 @@ type WALSegment struct {
 type WALEntry struct {
 	size  uint32
 	state WALSTATE_t
-	Id    uint64
-	Data  []byte
+	id    uint64
+	data  []byte
 }
 
 func fallocate(fd int, offset int64, size int64) {
@@ -64,26 +64,26 @@ func fallocate(fd int, offset int64, size int64) {
 }
 
 func (e *WALEntry) fixedSize() int {
-	return int(unsafe.Sizeof(e.Id) + unsafe.Sizeof(e.size) + unsafe.Sizeof(e.state))
+	return int(unsafe.Sizeof(e.id) + unsafe.Sizeof(e.size) + unsafe.Sizeof(e.state))
 }
 
 func (e *WALEntry) esize() int {
-	return e.fixedSize() + len(e.Data)
+	return e.fixedSize() + len(e.data)
 }
 
 func (e *WALEntry) toBytes() []byte {
 	size := e.esize()
-	bufStart := size - len(e.Data)
+	bufStart := size - len(e.data)
 	buf := make([]byte, size)
 	copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(e)), size))
-	buf2 := buf[bufStart : bufStart+len(e.Data)] // Data area slice
-	copy(buf2, e.Data)
+	buf2 := buf[bufStart : bufStart+len(e.data)] // Data area slice
+	copy(buf2, e.data)
 	return buf
 }
 
 func NewWALEntry(Id uint64, data []byte) *WALEntry {
 	entry := &WALEntry{
-		Id: Id, Data: data,
+		id: Id, data: data,
 	}
 	entry.size = uint32(entry.esize())
 	return entry
@@ -335,7 +335,7 @@ func (wal *WAL) Register(Id uint64) error {
 	RegisterMap[Id] = 1
 	MapLock.Unlock()
 
-	entry := WALEntry{state: WAL_START, Id: Id}
+	entry := WALEntry{state: WAL_START, id: Id}
 	entry.size = uint32(entry.esize())
 	err := wal.insert(&entry)
 	if err != nil {
@@ -376,7 +376,7 @@ func (wal *WAL) resetOffset() {
 
 func (wal *WAL) insert(entry *WALEntry) error {
 	MapLock.RLock()
-	_, ok := RegisterMap[entry.Id]
+	_, ok := RegisterMap[entry.id]
 	MapLock.RUnlock()
 
 	if !ok {
@@ -440,7 +440,7 @@ func (wal *WAL) writeWAL() error {
 }
 
 func (wal *WAL) Commit(Id uint64) error {
-	entry := WALEntry{state: WAL_COMMITTED, Id: Id}
+	entry := WALEntry{state: WAL_COMMITTED, id: Id}
 	entry.size = uint32(entry.esize())
 	err := wal.insert(&entry)
 	if err != nil {
@@ -453,7 +453,7 @@ func (wal *WAL) Commit(Id uint64) error {
 }
 
 func (wal *WAL) Abort(Id uint64) error {
-	entry := WALEntry{state: WAL_ABORTED, Id: Id}
+	entry := WALEntry{state: WAL_ABORTED, id: Id}
 	entry.size = uint32(entry.esize())
 	err := wal.insert(&entry)
 	if err != nil {
@@ -558,7 +558,7 @@ func DumpWal(fileName string) {
 
 			arr := buf2[entry.fixedSize():]
 			id := *(*byte)(unsafe.Pointer(
-				uintptr(unsafe.Pointer(&buf2[0])) + unsafe.Offsetof(entry.Id)))
+				uintptr(unsafe.Pointer(&buf2[0])) + unsafe.Offsetof(entry.id)))
 
 			switch entry.state {
 			case WAL_START:

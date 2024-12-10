@@ -17,34 +17,36 @@ func main() {
 
 	entry := NewWALEntry(uint64(id), []byte("Hello World"))
 
-	err = wal.Register(entry.Id)
+	err = wal.Register(uint64(id))
 	if err != nil {
 		fmt.Printf("Register: %v\n", err)
 		os.Exit(1)
 	}
 
 	wal.Insert(entry)
-	err = wal.Commit(entry.Id)
+	err = wal.Commit(uint64(id))
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
 
-	entry = NewWALEntry(20, []byte("Welcome to the New World"))
+	id = 20
+	entry = NewWALEntry(uint64(id), []byte("Welcome to the New World"))
 
-	wal.Register(entry.Id)
+	wal.Register(uint64(id))
 	wal.Insert(entry)
-	err = wal.Commit(entry.Id)
+	err = wal.Commit(uint64(id))
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
 
-	entry = NewWALEntry(21, []byte("Make yourself at home"))
+	id = 21
+	entry = NewWALEntry(uint64(id), []byte("Make yourself at home"))
 
-	wal.Register(entry.Id)
+	wal.Register(uint64(id))
 	wal.Insert(entry)
-	err = wal.Commit(entry.Id)
+	err = wal.Commit(uint64(id))
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
