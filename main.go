@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	var id = 19
+	var id uint64 = 19
 
 	wal, err := NewWAL()
 	if err != nil {
