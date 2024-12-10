@@ -205,8 +205,7 @@ func newWALSegment(size uint64, dir string) (*WALSegment, error) {
 	segment = new(WALSegment)
 	err := hdr.readHdr()
 	if err != nil {
-		Logger.Warn("newWALSegment", "wal_header", err)
-		segno = 3
+		return nil, fmt.Errorf("newWALSegment WAL header error: %v", err)
 	} else {
 		segno = hdr.segNo.Load()
 	}
