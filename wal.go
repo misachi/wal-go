@@ -10,7 +10,6 @@ import (
 	"path"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -35,6 +34,7 @@ const (
 	WALDir               = "./.tmp/wal_dir"
 	WAL_MAX_SHM          = 1024 // bytes
 	WAL_MAX_FILESIZE     = 500  // bytes
+	WAL_FALLOCATE        = true
 )
 
 var (
@@ -54,13 +54,6 @@ type WALEntry struct {
 	state WALSTATE_t
 	id    uint64
 	data  []byte
-}
-
-func fallocate(fd int, offset int64, size int64) {
-	err := syscall.Fallocate(fd, 0, 0, size)
-	if err != nil {
-		Logger.Warn("File allocation failed", "error_msg", err)
-	}
 }
 
 func (e *WALEntry) fixedSize() int {
@@ -92,7 +85,7 @@ func NewWALEntry(Id uint64, data []byte) *WALEntry {
 type WALHdr struct {
 	segNo      atomic.Uint32
 	nextSegNo  atomic.Uint32
-	size       uint64
+	size       uint64 // Keep track of size of current segment file
 	lastSyncAt time.Time
 	mtx        *sync.RWMutex
 }
@@ -304,7 +297,7 @@ retry:
 		if err != nil {
 			if hdr.segNo.Load() < 1 {
 				hdr.lastSyncAt = time.Now()
-				hdr.size = WAL_MAX_SHM
+				hdr.size = 0
 				hdr.segNo.Store(1)
 				hdr.nextSegNo.Store(1)
 				hdr.writeHdr()
@@ -358,7 +351,7 @@ func (wal *WAL) Register(Id uint64) error {
 	return nil
 }
 
-func (wal *WAL) sync(syncData bool) error {
+func (wal *WAL) sync(offset, size uint64) error {
 	err := wal.segment.file.Sync()
 	if err != nil {
 		return err
@@ -367,7 +360,10 @@ func (wal *WAL) sync(syncData bool) error {
 
 	wal.hdr.mtx.Lock()
 	wal.hdr.lastSyncAt = time.Now()
+	wal.hdr.size += size
 	wal.hdr.mtx.Unlock()
+
+	wal.hdr.writeHdr()
 	return nil
 }
 
@@ -400,22 +396,18 @@ func (wal *WAL) insert(entry *WALEntry) error {
 	}
 
 	size := entry.esize()
-	fileSize := wal.fileSize()
-	if fileSize == -1 {
-		return fmt.Errorf("Insert: stat error")
-	}
 
 	// Not enough space. We need to empty buffer
-	if (wal.offset.Load() + uint64(size)) > wal.hdr.size {
+	if (wal.offset.Load() + uint64(size)) > WAL_MAX_SHM {
 		wal.writeWAL()
-		wal.sync(true)
+		wal.sync(0, wal.offset.Load())
 	}
 
-	if uint64(fileSize) > uint64(WAL_SWITCH_THRESHOLD*float64(wal.segment.size)) {
+	if (wal.hdr.size + uint64(size)) > uint64(WAL_SWITCH_THRESHOLD*float64(wal.segment.size)) {
 		wal.extendWAL()
 	}
 
-	if (uint64(fileSize) + uint64(size)) >= wal.segment.size {
+	if (wal.hdr.size + uint64(size)) >= wal.segment.size {
 		wal.switchWAL()
 	}
 
@@ -438,11 +430,11 @@ func (wal *WAL) writeWAL() error {
 		return nil
 	}
 
-	offset := wal.fileSize()
-	if offset == -1 {
-		offset = 0
+	if wal.hdr.size <= 0 {
+		wal.segment.file.Seek(0, io.SeekStart)
+	} else {
+		wal.segment.file.Seek(int64(wal.hdr.size), io.SeekStart)
 	}
-	wal.segment.file.Seek(offset, io.SeekStart)
 	nr, err := wal.segment.file.Write(buf)
 
 	if err != nil {
@@ -452,6 +444,7 @@ func (wal *WAL) writeWAL() error {
 	if size != uint64(nr) {
 		Logger.Warn("writeWAL data mismatch", "written", nr, "wanted", size)
 	}
+
 	return nil
 }
 
@@ -464,7 +457,7 @@ func (wal *WAL) Commit(Id uint64) error {
 	}
 
 	wal.writeWAL()
-	wal.sync(false)
+	wal.sync(0, wal.offset.Load())
 	return nil
 }
 
@@ -476,7 +469,7 @@ func (wal *WAL) Abort(Id uint64) error {
 		return fmt.Errorf("Abort: %v", err)
 	}
 	wal.writeWAL()
-	wal.sync(false)
+	wal.sync(0, wal.offset.Load())
 	return nil
 }
 
@@ -507,8 +500,11 @@ func (wal *WAL) extendWAL() {
 		file, err := os.OpenFile(fileN, os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
 		if err == nil {
 			defer file.Close()
+			Logger.Info("Creating new log file", "new_file_name", file.Name())
 			wal.hdr.writeHdr()
-			fallocate(int(file.Fd()), 0, int64(wal.segment.size))
+			if WAL_FALLOCATE {
+				fallocate(int(file.Fd()), 0, int64(wal.segment.size))
+			}
 			file.Sync()
 		}
 	}()
@@ -532,7 +528,11 @@ func (wal *WAL) switchWAL() {
 		wal.segment.file = dataFile
 		wal.hdr.segNo.Store(nextSegNo)
 		wal.hdr.writeHdr()
+		wal.segment.file.Seek(0, io.SeekStart)
+		wal.hdr.size = 0
+		return
 	}
+	Logger.Error("switchWAL error", "err_msg", err)
 }
 
 func (w *WAL) Close() {
@@ -550,10 +550,15 @@ func DumpWal(fileName string) {
 	if err != nil {
 		fmt.Printf("Open error: %v\n", err)
 	}
-	stat, _ := walFile.Stat()
-	fileSize := stat.Size()
 
-	for i := 0; i < int(fileSize); i += chunk {
+	hdr := new(WALHdr)
+	hdr.mtx = &sync.RWMutex{}
+	err = hdr.readHdr()
+	if err != nil {
+		fmt.Printf("DumpWal: Meta file read error: %v\n", err)
+	}
+
+	for i := 0; i < int(hdr.size); i += chunk {
 		walFile.Seek(int64(i), io.SeekStart)
 		nRead, err := walFile.Read(buf)
 		if err != nil {
@@ -565,7 +570,7 @@ func DumpWal(fileName string) {
 		for off < nRead {
 			var state string
 			sz := *(*uint32)(unsafe.Pointer(&buf[off]))
-			if (off + int(sz)) > chunk {
+			if sz == 0 || (off+int(sz)) > chunk {
 				break
 			}
 
