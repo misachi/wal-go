@@ -423,6 +423,8 @@ func (wal *WAL) Insert(entry *WALEntry) error {
 	return wal.insert(entry)
 }
 
+// writeWAL writes the data to fs buffers. This does not guarantee the data
+// has been persisted to permanent storage. `WAL.sync` must be called for this purpose
 func (wal *WAL) writeWAL() error {
 	size := wal.offset.Load()
 	buf := wal.data[:size]
@@ -430,6 +432,7 @@ func (wal *WAL) writeWAL() error {
 		return nil
 	}
 
+	// make sure we have the right offset to write to
 	if wal.hdr.size <= 0 {
 		wal.segment.file.Seek(0, io.SeekStart)
 	} else {
