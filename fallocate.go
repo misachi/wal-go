@@ -18,20 +18,19 @@ func fallocate(fd int, offset, size int64) {
 		return
 	}
 
+	defer file.Close()
+
 	if (size - offset) < int64(PAGE_SIZE) {
 		log.Printf("Allocation region should be at least %d bytes\n", PAGE_SIZE)
-		goto end
+		return
 	}
 
 	if ((size - offset) % int64(PAGE_SIZE)) != 0 {
 		log.Printf("Allocation region must be PAGE_SIZE=%d aligned\n", PAGE_SIZE)
-		goto end
+		return
 	}
 
 	for i := offset; i < size; i += int64(PAGE_SIZE) {
 		file.Write(buf[:])
 	}
-
-end:
-	// file.Close()
 }
