@@ -16,3 +16,4 @@
 .old
 
 .tmp/
+wal-go
