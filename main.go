@@ -8,7 +8,14 @@ import (
 func main() {
 	var id uint64 = 19
 
-	wal, err := NewWAL()
+	// wal, err := NewWAL() // Without optional params
+
+	wal, err := NewWAL(
+		WithSwitchThresh(0.8),
+		WithMaxSHM(1024),
+		WithMaxFileSize(500),
+		WithAllowFallocate(true))
+
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)

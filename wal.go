@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,12 +30,13 @@ const (
 )
 
 const (
-	WAL_SWITCH_THRESHOLD = 0.8
-	WAL_FILE_MODE        = 0600
-	WALDir               = "./.tmp/wal_dir"
-	WAL_MAX_SHM          = 1024 // bytes
-	WAL_MAX_FILESIZE     = 500  // bytes
-	WAL_FALLOCATE        = true
+	// 	WAL_SWITCH_THRESHOLD = 0.8
+	META_FILE_MODE = 0600
+
+// WALDir               = "./.tmp/wal_dir"
+// WAL_MAX_SHM          = 1024 // bytes
+// WAL_MAX_FILESIZE     = 500  // bytes
+// WAL_FALLOCATE        = true
 )
 
 var (
@@ -90,7 +92,7 @@ type WALHdr struct {
 	mtx        *sync.RWMutex
 }
 
-func (hdr *WALHdr) writeHdr() error {
+func (hdr *WALHdr) writeHdr(metaFileDir string) error {
 	hdr.mtx.Lock()
 	defer hdr.mtx.Unlock()
 
@@ -108,7 +110,7 @@ func (hdr *WALHdr) writeHdr() error {
 		LastSyncAt: hdr.lastSyncAt.Format(time.RFC3339),
 	}
 
-	metaFile, err := os.OpenFile(path.Join(WALDir, "meta"), os.O_WRONLY, WAL_FILE_MODE)
+	metaFile, err := os.OpenFile(path.Join(metaFileDir, "meta"), os.O_WRONLY, META_FILE_MODE)
 	if err != nil {
 		return fmt.Errorf("writeHdr unable to open metadata file: %v", err)
 	}
@@ -135,7 +137,7 @@ func (hdr *WALHdr) writeHdr() error {
 	return nil
 }
 
-func (hdr *WALHdr) readHdr() error {
+func (hdr *WALHdr) readHdr(metaFileDir string) error {
 	hdr.mtx.RLock()
 	defer hdr.mtx.RUnlock()
 
@@ -146,7 +148,7 @@ func (hdr *WALHdr) readHdr() error {
 		LastSyncAt string
 	}
 
-	metaFile, err := os.OpenFile(path.Join(WALDir, "meta"), os.O_RDONLY, WAL_FILE_MODE)
+	metaFile, err := os.OpenFile(path.Join(metaFileDir, "meta"), os.O_RDONLY, META_FILE_MODE)
 	if err != nil {
 		return fmt.Errorf("readHdr unable to open metadata file: %v", err)
 	}
@@ -192,6 +194,7 @@ type WAL struct {
 	segment  *WALSegment
 	mtx      *sync.Mutex
 	metaFile *os.File
+	cfg      *config
 	offset   atomic.Uint64
 	data     []byte
 }
@@ -205,7 +208,7 @@ func newWALSegment(size uint64, dir string) (*WALSegment, error) {
 	segment = new(WALSegment)
 
 	hdr = CurrentWAL.hdr
-	err := hdr.readHdr()
+	err := hdr.readHdr(dir)
 	if err != nil {
 		return nil, fmt.Errorf("newWALSegment WAL header error: %v", err)
 	} else {
@@ -213,7 +216,7 @@ func newWALSegment(size uint64, dir string) (*WALSegment, error) {
 	}
 	file, err := os.OpenFile(
 		path.Join(dir, fmt.Sprintf("%08d", segno)),
-		os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
+		os.O_CREATE|os.O_WRONLY, os.FileMode(CurrentWAL.cfg.wal_file_mode))
 	if err != nil {
 		return nil, fmt.Errorf("newWALSegment failed to create file: %v", err)
 	}
@@ -224,83 +227,61 @@ func newWALSegment(size uint64, dir string) (*WALSegment, error) {
 	return segment, nil
 }
 
-func GetWAL() *WAL {
-	hdr := new(WALHdr)
-	segment := new(WALSegment)
-
-	if CurrentWAL != nil {
-		return CurrentWAL
-	}
-
-retry:
-	if WALGLock.CompareAndSwap(false, true) {
-		err := hdr.readHdr()
-		if err != nil {
-			Logger.Error("GetWAL header: %v", err)
-			return nil
-		}
-
-		p := path.Join(WALDir, fmt.Sprintf("%08d", hdr.segNo.Load()))
-		file, err := os.OpenFile(p, os.O_WRONLY, WAL_FILE_MODE)
-		if err != nil {
-			Logger.Error("GetWAL failed to open file", "file_open", err)
-		}
-		segment.file = file
-		segment.size = WAL_MAX_FILESIZE
-		segment.location = WALDir
-
-		metaFile, err := os.OpenFile(path.Join(WALDir, "meta"), os.O_WRONLY, WAL_FILE_MODE)
-		if err != nil {
-			Logger.Error("GetWAL failed to open meta file", "file_open", err)
-			return nil
-		}
-
-		CurrentWAL = &WAL{
-			segment:  segment,
-			mtx:      &sync.Mutex{},
-			data:     make([]byte, WAL_MAX_SHM),
-			metaFile: metaFile,
-			hdr:      hdr,
-		}
-	}
-
-	if CurrentWAL == nil {
-		goto retry
-	}
-	return CurrentWAL
-
-}
-
-func NewWAL() (*WAL, error) {
+func NewWAL(cfgOptions ...walOption) (*WAL, error) {
 	if CurrentWAL != nil {
 		return CurrentWAL, nil
+	}
+
+	cfg := &config{}
+	for _, opt := range cfgOptions {
+		opt(cfg)
+	}
+
+	if cfg.wal_directory == "" {
+		cfg.wal_directory = "./.tmp/wal_dir"
+	}
+
+	if cfg.wal_file_mode == 0 {
+		cfg.wal_file_mode = 0600
+	}
+
+	if cfg.wal_switch_threshold == 0 {
+		cfg.wal_switch_threshold = 0.7
+	}
+
+	if cfg.wal_max_shm <= 0 {
+		cfg.wal_max_shm = 1 << 20 // 1MB
+	}
+
+	if cfg.wal_max_file_size <= 0 {
+		cfg.wal_max_file_size = 1 << 20 // 1 MB
 	}
 
 retry:
 	if WALGLock.CompareAndSwap(false, true) {
 		hdr := new(WALHdr)
-		err := os.MkdirAll(WALDir, WAL_FILE_MODE)
+		err := os.MkdirAll(cfg.wal_directory, os.FileMode(cfg.wal_file_mode))
 		if err != nil {
 			return nil, fmt.Errorf("NewWAL new directory: %v", err)
 		}
 
-		metaPath := path.Join(WALDir, "meta")
+		metaPath := path.Join(cfg.wal_directory, "meta")
 
-		metaFile, err := os.OpenFile(metaPath, os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
+		metaFile, err := os.OpenFile(metaPath, os.O_CREATE|os.O_WRONLY, os.FileMode(cfg.wal_file_mode))
 		if err != nil {
 			return nil, fmt.Errorf("NewWAL failed to open meta file: %v", err)
 		}
 
 		hdr.mtx = &sync.RWMutex{}
 
-		err = hdr.readHdr()
+		err = hdr.readHdr(cfg.wal_directory)
 		if err != nil {
 			if hdr.segNo.Load() < 1 {
 				hdr.lastSyncAt = time.Now()
 				hdr.size = 0
 				hdr.segNo.Store(1)
 				hdr.nextSegNo.Store(1)
-				hdr.writeHdr()
+				hdr.writeHdr(cfg.wal_directory)
 			} else {
 				return nil, fmt.Errorf("NewWAL: %v", err)
 			}
@@ -308,12 +289,13 @@ retry:
 
 		CurrentWAL = &WAL{
 			mtx:      &sync.Mutex{},
-			data:     make([]byte, WAL_MAX_SHM),
+			data:     make([]byte, cfg.wal_max_shm),
 			metaFile: metaFile,
 			hdr:      hdr,
+			cfg:      cfg,
 		}
 
-		segment, err := newWALSegment(WAL_MAX_FILESIZE, WALDir)
+		segment, err := newWALSegment(cfg.wal_max_file_size, cfg.wal_directory)
 		if err != nil {
 			return nil, fmt.Errorf("NewWAL unable to create wal segment: %v", err)
 		}
@@ -363,7 +345,7 @@ func (wal *WAL) sync(offset, size uint64) error {
 	wal.hdr.size += size
 	wal.hdr.mtx.Unlock()
 
-	wal.hdr.writeHdr()
+	wal.hdr.writeHdr(wal.cfg.wal_directory)
 	return nil
 }
 
@@ -398,12 +380,12 @@ func (wal *WAL) insert(entry *WALEntry) error {
 	size := entry.esize()
 
 	// Not enough space. We need to empty buffer
-	if (wal.offset.Load() + uint64(size)) > WAL_MAX_SHM {
+	if (wal.offset.Load() + uint64(size)) > wal.cfg.wal_max_shm {
 		wal.writeWAL()
 		wal.sync(0, wal.offset.Load())
 	}
 
-	if (wal.hdr.size + uint64(size)) > uint64(WAL_SWITCH_THRESHOLD*float64(wal.segment.size)) {
+	if (wal.hdr.size + uint64(size)) > uint64(wal.cfg.wal_switch_threshold*float32(wal.segment.size)) {
 		wal.extendWAL()
 	}
 
@@ -500,12 +482,12 @@ func (wal *WAL) extendWAL() {
 
 	go func() {
 		fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", newNextSegNo))
-		file, err := os.OpenFile(fileN, os.O_CREATE|os.O_WRONLY, WAL_FILE_MODE)
+		file, err := os.OpenFile(fileN, os.O_CREATE|os.O_WRONLY, os.FileMode(wal.cfg.wal_file_mode))
 		if err == nil {
 			defer file.Close()
 			Logger.Info("Creating new log file", "new_file_name", file.Name())
-			wal.hdr.writeHdr()
-			if WAL_FALLOCATE {
+			wal.hdr.writeHdr(wal.cfg.wal_directory)
+			if wal.cfg.wal_allow_fallocate {
 				fallocate(int(file.Fd()), 0, int64(wal.segment.size))
 			}
 			file.Sync()
@@ -525,12 +507,12 @@ func (wal *WAL) switchWAL() {
 
 	wal.segment.file.Close() // Closing old segment file
 	fileN := path.Join(wal.segment.location, fmt.Sprintf("%08d", nextSegNo))
-	dataFile, err := os.OpenFile(fileN, os.O_WRONLY, WAL_FILE_MODE)
+	dataFile, err := os.OpenFile(fileN, os.O_WRONLY, os.FileMode(wal.cfg.wal_file_mode))
 	if err == nil {
 		Logger.Info("Switching log file", "new_file_name", dataFile.Name())
 		wal.segment.file = dataFile
 		wal.hdr.segNo.Store(nextSegNo)
-		wal.hdr.writeHdr()
+		wal.hdr.writeHdr(wal.cfg.wal_directory)
 		wal.segment.file.Seek(0, io.SeekStart)
 		wal.hdr.size = 0
 		return
@@ -549,14 +531,16 @@ func (w *WAL) Close() {
 func DumpWal(fileName string) {
 	chunk := 1024
 	buf := make([]byte, chunk)
-	walFile, err := os.OpenFile(fileName, os.O_RDONLY, WAL_FILE_MODE)
+	walFile, err := os.OpenFile(fileName, os.O_RDONLY, 0600)
 	if err != nil {
 		fmt.Printf("Open error: %v\n", err)
 	}
 
+	dir := filepath.Dir(fileName)
+
 	hdr := new(WALHdr)
 	hdr.mtx = &sync.RWMutex{}
-	err = hdr.readHdr()
+	err = hdr.readHdr(dir)
 	if err != nil {
 		fmt.Printf("DumpWal: Meta file read error: %v\n", err)
 	}
