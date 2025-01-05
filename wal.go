@@ -59,7 +59,8 @@ type WALEntry struct {
 }
 
 func (e *WALEntry) fixedSize() int {
-	return int(unsafe.Sizeof(e.id) + unsafe.Sizeof(e.size) + unsafe.Sizeof(e.state))
+	sz := int(unsafe.Sizeof(e.id) + unsafe.Sizeof(e.size) + unsafe.Sizeof(e.state))
+	return ((sz + 7) & ^7) // 8 byte alignment
 }
 
 func (e *WALEntry) esize() int {
@@ -561,14 +562,10 @@ func DumpWal(fileName string) {
 				break
 			}
 
-			entry := WALEntry{}
+			entry := *(*WALEntry)(unsafe.Pointer(&buf[off]))
 			arr := buf[off+entry.fixedSize() : off+int(sz)]
-			id := *(*byte)(unsafe.Pointer(
-				uintptr(unsafe.Pointer(&buf[off])) + unsafe.Offsetof(entry.id)))
-			eState := *(*WALSTATE_t)(unsafe.Pointer(
-				uintptr(unsafe.Pointer(&buf[off])) + unsafe.Offsetof(entry.state)))
 
-			switch eState {
+			switch entry.state {
 			case WAL_START:
 				state = "START"
 			case WAL_INSERT:
@@ -580,7 +577,7 @@ func DumpWal(fileName string) {
 			default:
 				Logger.Warn("Unknown state")
 			}
-			fmt.Printf("id=%d, size=%d, state=%s, data=%s\n", id, sz, state, arr)
+			fmt.Printf("id=%d, size=%d, state=%s, data=%s\n", entry.id, sz, state, arr)
 			off += int(sz)
 		}
 	}
