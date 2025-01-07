@@ -77,7 +77,8 @@ func BenchmarkSingleWriterNoWait(b *testing.B) {
 		WithSwitchThresh(0.8),
 		WithMaxSHM(1024*1024*128),
 		WithMaxFileSize(1024*1024*1024),
-		WithAllowFallocate(true))
+		WithAllowFallocate(true),
+		WithBaseDir(".tmp/wal_dir1"))
 
 	if err != nil {
 		fmt.Printf("%v\n", err)
