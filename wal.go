@@ -404,7 +404,8 @@ func (wal *WAL) insert(entry *WALEntry) error {
 	// Reserve space for entry
 	offset := wal.setOffset(uint64(size))
 
-	wal.data = append(wal.data[:offset], entry.toBytes()...)
+	copy(wal.data[offset:offset+uint64(size)], entry.toBytes())
+
 	return nil
 }
 
