@@ -191,13 +191,14 @@ func (hdr *WALHdr) readHdr(metaFileDir string) error {
 }
 
 type WAL struct {
-	hdr      *WALHdr
-	segment  *WALSegment
-	mtx      *sync.Mutex
-	metaFile *os.File
-	cfg      *config
-	offset   atomic.Uint64
-	data     []byte
+	hdr       *WALHdr
+	segment   *WALSegment
+	mtx       *sync.Mutex
+	metaFile  *os.File
+	cfg       *config
+	offset    atomic.Uint64
+	lastWrite uint64
+	data      []byte
 }
 
 func newWALSegment(size uint64, dir string) (*WALSegment, error) {
@@ -289,12 +290,15 @@ retry:
 		}
 
 		CurrentWAL = &WAL{
-			mtx:      &sync.Mutex{},
-			data:     make([]byte, cfg.wal_max_shm),
-			metaFile: metaFile,
-			hdr:      hdr,
-			cfg:      cfg,
+			mtx:       &sync.Mutex{},
+			data:      make([]byte, cfg.wal_max_shm),
+			metaFile:  metaFile,
+			hdr:       hdr,
+			cfg:       cfg,
+			lastWrite: 0,
 		}
+
+		// CurrentWAL.offset.Store(hdr.size)
 
 		segment, err := newWALSegment(cfg.wal_max_file_size, cfg.wal_directory)
 		if err != nil {
@@ -339,11 +343,10 @@ func (wal *WAL) sync(offset, size uint64) error {
 	if err != nil {
 		return err
 	}
-	wal.resetOffset()
 
 	wal.hdr.mtx.Lock()
 	wal.hdr.lastSyncAt = time.Now()
-	wal.hdr.size += size
+	wal.lastWrite = wal.offset.Load()
 	wal.hdr.mtx.Unlock()
 
 	wal.hdr.writeHdr(wal.cfg.wal_directory)
@@ -410,7 +413,14 @@ func (wal *WAL) Insert(entry *WALEntry) error {
 // has been persisted to permanent storage. `WAL.sync` must be called for this purpose
 func (wal *WAL) writeWAL() error {
 	size := wal.offset.Load()
-	buf := wal.data[:size]
+
+	var buf []byte
+	if size > wal.lastWrite {
+		buf = wal.data[wal.lastWrite:size]
+	} else {
+		buf = wal.data[wal.lastWrite:]
+	}
+
 	if len(buf) <= 0 {
 		return nil
 	}
