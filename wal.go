@@ -433,18 +433,22 @@ func (wal *WAL) writeWAL() error {
 	}
 	nr, err := wal.segment.file.Write(buf)
 
+	wal.hdr.mtx.Lock()
+	wal.hdr.size += uint64(len(buf))
+	wal.hdr.mtx.Unlock()
+
 	if err != nil {
 		return fmt.Errorf("writeWAL failed: %v", err)
 	}
 
-	if size != uint64(nr) {
-		Logger.Warn("writeWAL data mismatch", "written", nr, "wanted", size)
+	if len(buf) != nr {
+		Logger.Warn("writeWAL data mismatch", "written", nr, "wanted", len(buf))
 	}
 
 	return nil
 }
 
-func (wal *WAL) Commit(Id uint64) error {
+func (wal *WAL) Commit(Id uint64, doWait bool) error {
 	entry := WALEntry{state: WAL_COMMITTED, id: Id}
 	entry.size = uint32(entry.esize())
 	err := wal.insert(&entry)
@@ -452,8 +456,10 @@ func (wal *WAL) Commit(Id uint64) error {
 		return fmt.Errorf("Commit: %v", err)
 	}
 
-	wal.writeWAL()
-	wal.sync(0, wal.offset.Load())
+	if doWait {
+		wal.writeWAL()
+		wal.sync(0, wal.offset.Load())
+	}
 	return nil
 }
 
