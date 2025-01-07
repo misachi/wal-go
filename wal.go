@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"fmt"
 	"io"
@@ -548,8 +549,24 @@ func (w *WAL) Close() {
 	w.metaFile.Close()
 }
 
+func (w *WAL) BGWriter(ctx context.Context, interval int32) {
+	ticker := time.NewTicker(time.Duration(interval) * time.Microsecond)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			off := w.offset.Load()
+			if off > 0 {
+				w.writeWAL()
+				w.sync(0, w.offset.Load())
+			}
+		}
+	}
+}
+
 func DumpWal(fileName string) {
-	chunk := 1024
+	chunk := 4096
 	buf := make([]byte, chunk)
 	walFile, err := os.OpenFile(fileName, os.O_RDONLY, 0600)
 	if err != nil {
