@@ -13,7 +13,7 @@ func main() {
 	wal, err := NewWAL(
 		WithSwitchThresh(0.8),
 		WithMaxSHM(1024),
-		WithMaxFileSize(500),
+		WithMaxFileSize(1024),
 		WithAllowFallocate(true))
 
 	if err != nil {
@@ -31,18 +31,18 @@ func main() {
 	}
 
 	wal.Insert(entry)
-	err = wal.Commit(id)
+	err = wal.Commit(id, true)
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
 
 	id = 20
-	entry = NewWALEntry(id, []byte{87, 101,108, 99, 111, 109, 101, 32, 116, 111, 32, 116, 104, 101, 32, 78, 101, 119, 32, 87, 111, 114, 108, 100}) // bytes: Welcome to the New World
+	entry = NewWALEntry(id, []byte{87, 101, 108, 99, 111, 109, 101, 32, 116, 111, 32, 116, 104, 101, 32, 78, 101, 119, 32, 87, 111, 114, 108, 100}) // bytes: Welcome to the New World
 
 	wal.Register(id)
 	wal.Insert(entry)
-	err = wal.Commit(id)
+	err = wal.Commit(id, true)
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
@@ -53,7 +53,7 @@ func main() {
 
 	wal.Register(id)
 	wal.Insert(entry)
-	err = wal.Commit(id)
+	err = wal.Commit(id, true)
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
