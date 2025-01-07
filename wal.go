@@ -583,7 +583,10 @@ func DumpWal(fileName string) {
 		fmt.Printf("DumpWal: Meta file read error: %v\n", err)
 	}
 
-	for i := 0; i < int(hdr.size); i += chunk {
+	stat, _ := walFile.Stat()
+
+	var i int64
+	for i = 0; i < stat.Size(); i += int64(chunk) {
 		walFile.Seek(int64(i), io.SeekStart)
 		nRead, err := walFile.Read(buf)
 		if err != nil {
@@ -594,12 +597,18 @@ func DumpWal(fileName string) {
 		off := 0
 		for off < nRead {
 			var state string
-			sz := *(*uint32)(unsafe.Pointer(&buf[off]))
-			if sz == 0 || (off+int(sz)) > chunk {
+
+			entry := *(*WALEntry)(unsafe.Pointer(&buf[off]))
+			sz := entry.size
+			if sz == 0 {
 				break
 			}
 
-			entry := *(*WALEntry)(unsafe.Pointer(&buf[off]))
+			// TODO: Handle records that span multiple pages. We are currently skipping such records
+			if (off + int(sz)) > chunk {
+				off += int(sz)
+				break
+			}
 			arr := buf[off+entry.fixedSize() : off+int(sz)]
 
 			switch entry.state {
