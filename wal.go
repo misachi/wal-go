@@ -601,7 +601,10 @@ func DumpWal(fileName string) {
 		for off < nRead {
 			var state string
 
+			// This is evil. And invokes `checkptr: misaligned pointer conversion`
+			// error when built with `-asan`
 			entry := *(*WALEntry)(unsafe.Pointer(&buf[off]))
+
 			sz := entry.size
 			if sz == 0 {
 				break

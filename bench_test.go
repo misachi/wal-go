@@ -56,7 +56,7 @@ func BenchmarkSingleWriterWithWait(b *testing.B) {
 		WithMaxSHM(1024*1024*128),
 		WithMaxFileSize(1024*1024*1024),
 		WithAllowFallocate(true),
-		WithBaseDir(".tmp/wal_dir3"))
+		WithBaseDir(b.TempDir()))
 
 	if err != nil {
 		fmt.Printf("%v\n", err)
@@ -78,7 +78,7 @@ func BenchmarkSingleWriterNoWait(b *testing.B) {
 		WithMaxSHM(1024*1024*128),
 		WithMaxFileSize(1024*1024*1024),
 		WithAllowFallocate(true),
-		WithBaseDir(".tmp/wal_dir1"))
+		WithBaseDir(b.TempDir()))
 
 	if err != nil {
 		fmt.Printf("%v\n", err)
@@ -104,7 +104,7 @@ func BenchmarkParallelWriterNoWait(b *testing.B) {
 		WithMaxSHM(1024*1024*128),
 		WithMaxFileSize(1024*1024*1024),
 		WithAllowFallocate(true),
-		WithBaseDir(".tmp/wal_dir2"))
+		WithBaseDir(b.TempDir()))
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
