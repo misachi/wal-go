@@ -359,6 +359,9 @@ func (wal *WAL) setOffset(size uint64) uint64 {
 	for !successful {
 		offset = wal.offset.Load()
 		newOffset := offset + size
+		if newOffset >= wal.cfg.wal_max_shm {
+			newOffset = 0
+		}
 		successful = wal.offset.CompareAndSwap(offset, newOffset)
 	}
 	return offset
