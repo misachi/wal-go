@@ -387,12 +387,6 @@ func (wal *WAL) insert(entry *WALEntry) error {
 
 	size := entry.esize()
 
-	// Not enough space. We need to empty buffer
-	if (wal.offset.Load() + uint64(size)) > wal.cfg.wal_max_shm {
-		wal.writeWAL()
-		wal.sync(0, wal.offset.Load())
-	}
-
 	if (wal.hdr.size + uint64(size)) > uint64(wal.cfg.wal_switch_threshold*float32(wal.segment.size)) {
 		wal.extendWAL()
 	}
@@ -403,6 +397,13 @@ func (wal *WAL) insert(entry *WALEntry) error {
 
 	// Reserve space for entry
 	offset := wal.setOffset(uint64(size))
+
+	// Not enough space. We need to empty buffer
+	if (offset + uint64(size)) > wal.cfg.wal_max_shm {
+		wal.writeWAL()
+		wal.sync(0, offset)
+		offset = 0
+	}
 
 	copy(wal.data[offset:offset+uint64(size)], entry.toBytes())
 
