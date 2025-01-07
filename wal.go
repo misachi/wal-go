@@ -537,7 +537,9 @@ func (wal *WAL) switchWAL() {
 		wal.hdr.segNo.Store(nextSegNo)
 		wal.hdr.writeHdr(wal.cfg.wal_directory)
 		wal.segment.file.Seek(0, io.SeekStart)
+		wal.hdr.mtx.Lock()
 		wal.hdr.size = 0
+		wal.hdr.mtx.Unlock()
 		return
 	}
 	Logger.Error("switchWAL error", "err_msg", err)
