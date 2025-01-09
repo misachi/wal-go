@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	_wal "github.com/misachi/wal-go/wal"
 )
 
 func main() {
@@ -10,11 +11,11 @@ func main() {
 
 	// wal, err := NewWAL() // Without optional params
 
-	wal, err := NewWAL(
-		WithSwitchThresh(0.8),
-		WithMaxSHM(1024),
-		WithMaxFileSize(1024),
-		WithAllowFallocate(true))
+	wal, err := _wal.NewWAL(
+		_wal.WithSwitchThresh(0.8),
+		_wal.WithMaxSHM(1024),
+		_wal.WithMaxFileSize(1024),
+		_wal.WithAllowFallocate(true))
 
 	if err != nil {
 		fmt.Printf("%v\n", err)
@@ -22,7 +23,7 @@ func main() {
 	}
 	defer wal.Close()
 
-	entry := NewWALEntry(id, []byte("Hello World"))
+	entry := _wal.NewWALEntry(id, []byte("Hello World"))
 
 	err = wal.Register(id)
 	if err != nil {
@@ -38,7 +39,7 @@ func main() {
 	}
 
 	id = 20
-	entry = NewWALEntry(id, []byte{87, 101, 108, 99, 111, 109, 101, 32, 116, 111, 32, 116, 104, 101, 32, 78, 101, 119, 32, 87, 111, 114, 108, 100}) // bytes: Welcome to the New World
+	entry = _wal.NewWALEntry(id, []byte{87, 101, 108, 99, 111, 109, 101, 32, 116, 111, 32, 116, 104, 101, 32, 78, 101, 119, 32, 87, 111, 114, 108, 100}) // bytes: Welcome to the New World
 
 	wal.Register(id)
 	wal.Insert(entry)
@@ -49,7 +50,7 @@ func main() {
 	}
 
 	id = 21
-	entry = NewWALEntry(id, []byte("Make yourself at home"))
+	entry = _wal.NewWALEntry(id, []byte("Make yourself at home"))
 
 	wal.Register(id)
 	wal.Insert(entry)
@@ -59,5 +60,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	DumpWal(wal.segment.file.Name())
+	_wal.DumpWal(wal.SegmentFile().Name())
 }

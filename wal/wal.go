@@ -1,4 +1,4 @@
-package main
+package wal
 
 import (
 	"bytes"
@@ -202,6 +202,10 @@ type WAL struct {
 	data      []byte
 }
 
+func (wal *WAL) SegmentFile() *os.File {
+	return wal.segment.file
+}
+
 func newWALSegment(size uint64, dir string) (*WALSegment, error) {
 	var segment *WALSegment
 	var hdr *WALHdr
@@ -298,8 +302,6 @@ retry:
 			cfg:       cfg,
 			lastWrite: 0,
 		}
-
-		// CurrentWAL.offset.Store(hdr.size)
 
 		segment, err := newWALSegment(cfg.wal_max_file_size, cfg.wal_directory)
 		if err != nil {

@@ -1,4 +1,4 @@
-package main
+package wal
 
 type config struct {
 	wal_allow_fallocate  bool

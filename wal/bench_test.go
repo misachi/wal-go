@@ -1,4 +1,4 @@
-package main
+package wal
 
 import (
 	"context"
@@ -65,6 +65,7 @@ func BenchmarkSingleWriterWithWait(b *testing.B) {
 	defer wal.Close()
 
 	b.ResetTimer()
+	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
 		dummy_write(wal, true)
@@ -92,6 +93,7 @@ func BenchmarkSingleWriterNoWait(b *testing.B) {
 	go wal.BGWriter(ctx, 5)
 
 	b.ResetTimer()
+	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
 		dummy_write(wal, false)
@@ -117,6 +119,7 @@ func BenchmarkParallelWriterNoWait(b *testing.B) {
 	go wal.BGWriter(ctx, 5)
 
 	b.ResetTimer()
+	b.ReportAllocs()
 
 	b.RunParallel(func(p *testing.PB) {
 		for p.Next() {
